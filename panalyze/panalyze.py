@@ -8,19 +8,20 @@ from typing import Callable, Union, Optional
 import numpy as np
 import numpy.typing as npt
 from scipy.interpolate import CubicSpline
-import pandas as pd
-import matplotlib.pyplot as plt
 from datetime import datetime
 from io import StringIO
-
+import importlib.resources as impresources
+from . import materials
 
 vector = matrix = npt.NDArray[np.float_]  # Annotation shorthand
 
-# Sapphire reference heat capacity data
-SAPPHIRE_CP_DATA = np.loadtxt("sapphire_cp.csv", dtype=np.float32,
-                              delimiter=",", skiprows=1, usecols=(0, 2))
-SAPPHIRE_CP = CubicSpline(SAPPHIRE_CP_DATA[:, 0],
-                          SAPPHIRE_CP_DATA[:, 1])
+# Sapphire heat capacity (there is probably a more elegant way to do this)
+fn = impresources.files(materials) / 'sapphire_cp.csv'
+CP_SAPPHIRE_DATA = np.loadtxt(fn,
+                              dtype=np.float32, delimiter=",",
+                              skiprows=1, usecols=(0, 2))
+CP_SAPPHIRE = CubicSpline(CP_SAPPHIRE_DATA[:, 0], CP_SAPPHIRE_DATA[:, 1])
+
 
 class Measurement():
     """Class to represent a DSC measurement.
@@ -44,10 +45,8 @@ class Measurement():
 
     Methods
     -------
-    read_csv(fn)
+    read_trios_csv(fn)
         Reads TRIOS csv file and updates attributes.
-    plot()
-        Plots T vs. ΔH for all segments.
 
     """
 
@@ -62,10 +61,10 @@ class Measurement():
         Note: For now only CSV files exported from TRIOS are supported.
 
         """
-        self.read_csv(fn)
+        self.read_trios_csv(fn)
 
-    def read_csv(self, fn: str):
-        """Read file.
+    def read_trios_csv(self, fn: str):
+        """Read csv file exported frmo TRIOS software by TA.
 
         Parameters
         ----------
@@ -74,9 +73,9 @@ class Measurement():
 
         Note
         ----
-        Currently only supports CSV files exported from TRIOS. The datafile should
-        include the parameters and the steps. The following columns (in order) need to
-        be exported: time [s], temperature [°C], heat flow [mW], norm. heat flow [W/g].
+        The datafile should include the parameters and the steps. The following
+        columns (in order) need to be exported: time [s], temperature [°C],
+        heat flow [mW], norm. heat flow [W/g].
 
         """
         with open(fn, 'r', encoding='utf-8-sig') as f:
@@ -98,41 +97,11 @@ class Measurement():
             self.segments = []
             for segment in segments:
                 name = segment.split("\n")[0]
-                data = pd.read_csv(StringIO(segment), sep=",", header=2)
-                data.columns = ["Time [s]",
-                                "Temperature [°C]",
-                                "Heat flow [mW]",
-                                "Norm. heat flow [W/g]"]
+                data = np.genfromtxt(StringIO(segment),
+                                     delimiter=",", skip_header=3,
+                                     autostrip=True, missing_values=np.NAN)
+                data = data[~np.isnan(data[:, :3]).any(axis=1)]  # clear NaNs
                 self.segments.append(Segment(data, name, self.mass))
-
-    def plot(self, ax: Optional[plt.Axes] = None) -> plt.Axes:
-        """Plot T versus ΔH for all segments.
-
-        Parameters
-        ----------
-        ax : plt.Axes (optional)
-            An axes where to plot.
-
-        Returns
-        -------
-        ax : plt.Axes
-            Axes handle.
-
-        Note
-        ----
-        Uses the pandas plot function, which also means that all the pandas plot options
-        are available. More information can be found here:
-
-        https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.plot.html
-
-        """
-        if ax == None:
-            fig = plt.figure()
-            ax = fig.add_axes([0.15, 0.18, 0.7, 0.72])
-        for segment in self.segments:
-            segment.plot(x="Temperature [°C]", y="Heat flow [mW]", ax=ax, legend=None)
-        ax.set_title(self.sample)
-        return ax
 
     def __str__(self) -> str:
         """Return string for printing."""
@@ -160,8 +129,12 @@ class Segment():
 
     Attributes
     ----------
-    data : pd.DataFrame
-        Pandas DataFrame with DSC data.
+    data : np.ndarray(dim=2, type=float)
+        Matrix with DSC data in the following columns:
+          - Time [s]
+          - Temperature [°C]
+          - Heat flow [mW]
+          - Normalized heat flow [J/g]
     name : str
         Description of segment
     N : int
@@ -173,23 +146,22 @@ class Segment():
 
     Methods
     -------
-    plot()
-        Plot Segment data.
     calculate_cp(baseline, sapphire, cp_sapphire)
         Calculate heat capacity based on Segment data.
 
     """
 
-    def __init__(self, data: pd.DataFrame, name: str="", mass: float=0.0):
+    def __init__(self, data: matrix, name: str = "", mass: float = 0.0):
         """Initialize Segment instance.
 
         Parameters
         ----------
-        data : Pandas DataFrame with:
-            - Time [s]
-            - Temperature [°C]
-            - Heat flow [W]
-            - Norm. heat flow [W/g]
+        data : np.ndarray(dim=2, dtype=float)
+            Matrix with:
+              - Time [s]
+              - Temperature [°C]
+              - Heat flow [W]
+              - Normalized heat flow [W/g]
         name : str (defaults to "")
             Description of the segment.
         mass : float (defaults to 0.0)
@@ -200,40 +172,12 @@ class Segment():
         self.data = data
         self.mass = mass
         self.N = len(data)
-        self.t_interval = (data.iloc[0, 0], data.iloc[-1, 0])
+        self.t_interval = (data[0, 0], data[-1, 0])
 
-    def plot(self, *args, **kwargs) -> plt.Axes:
-        """Plot data.
-
-        Parameters
-        ----------
-        x : str | int (defaults to None)
-            Label or column position of data to plot on x-axis.
-        y : str | int (defaults to None)
-            Label or column position of data to plot on y-axis.
-        ax : plt.Axes (optional)
-            An axes where to plot.
-
-        Returns
-        -------
-        ax : plt.Axes
-            Axes handle.
-
-        Note
-        ----
-        Uses the pandas plot function, which also means that all the pandas plot options
-        are available. More can be found here:
-
-        https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.plot.html
-
-        """
-        ax = self.data.plot(*args, **kwargs)
-        return ax
-
-    def calculate_cp(self,
-                     baseline: Segment, sapphire: Segment,
-                     cp_sapphire: Callable=SAPPHIRE_CP) -> matrix:
-        """Calculate heat capacity.
+    def calculate_cp(self, baseline: Segment, sapphire: Segment,
+                     T: Optional[vector] = None,
+                     cp_sapphire: Callable = CP_SAPPHIRE) -> matrix:
+        """Calculate specific heat.
 
         Parameters
         ----------
@@ -241,29 +185,42 @@ class Segment():
             Baseline DSC data.
         sapphire : Segment
             Sapphire DSC data.
-        cp_sapphire : Callable
+        T : np.ndarray(dim=1, dtype=float), optional (defaults to None)
+            Temperature range to calculate specific heat. If not provided, the
+            temperature range will equal to `np.arange(T_min+5, T_max-5)`.
+        cp_sapphire : Callable, optional (defaults to CP_SAPPHIRE)
             Function that returns cp of sapphire at T.
 
         Returns
         -------
-        cp : pd.DataFrame
-            Dataframe with temperature and heat capacity.
-
-        Note: the cp data is also added to self.data.
+        cp : np.ndarray(dim=2, dtype=float)
+            Matrix with temperature and specific heat.
 
         """
-        T = self.data.iloc[:, 1]
-        Dst = sapphire._H(T) - baseline._H(T)
-        Ds = self.data.iloc[:, 2] - baseline._H(T)
+        if T is None:
+            T_min = self.data[:, 1].min().round() + 5
+            T_max = self.data[:, 1].max().round() - 5
+            T = np.arange(T_min, T_max)
+        Dst = sapphire._interp_H(T) - baseline._interp_H(T)
+        Ds = self._interp_H(T) - baseline._interp_H(T)
         cp = cp_sapphire(T) * (Ds/Dst) * (sapphire.mass/self.mass)
-        if new_column_name in df.columns:
-            self.data["Specific heat [J/g°C]"] = cp
-        else:
-            self.data.insert(4, "Specific heat [J/g°C]", cp)
-        return pd.concat((T, cp.rename("Specific heat [J/g°C]")), axis=1)
+        return np.column_stack((T, cp))
 
-    def _H(self, T: float) -> float:
-        """Return heat flow at T based on cubic spline interpolation.
+    def calculate_enthalpy(self) -> float:
+        """Return
+        """
+        if self.baseline is None:
+            raise RuntimeError("Baseline not yet defined")
+        else:
+            pass
+
+    def baseline_from_lims(self, lims: tuple[int, int]):
+        """
+        """
+        self.baseline = Baseline(self.data, lims)
+
+    def _interp_H(self, T: float) -> float:
+        """Return heat flow at T based on linear interpolation.
 
         Parameter
         ---------
@@ -276,24 +233,76 @@ class Segment():
             Heat flow at T in mW.
 
         """
-        if all(np.diff(self.data.iloc[:, 1])) > 0:
-            cs = CubicSpline(self.data.iloc[:, 1], self.data.iloc[:, 2])
-        elif all(np.diff(self.data.iloc[:, 1])) < 0:
-            cs = CubicSpline(self.data.iloc[::-1, 1], self.data.iloc[::-1, 2])
+        if all(np.diff(self.data[:, 1]) > 0):
+            return np.interp(T, self.data[:, 1], self.data[:, 2])
+        elif all(np.diff(self.data[:, 1]) < 0):
+            return np.interp(T, self.data[::-1, 1], self.data[::-1, 2])
         else:
             raise Exception("Temperature data must be strictly " +
                             "increasing or decreasing for interpolation.")
-        return cs(T)
 
     def __str__(self) -> str:
         """Return string for printing."""
         meta = (f"\n{self.name}\n" +
-                "-------------------------------\n" +
-                f"Number of data points:  {self.N:>5}\n" +
-                f"Start time:             {int(self.t_interval[0]):>5} s\n"
-                f"End time:               {int(self.t_interval[1]):>5} s\n\n")
-        return (meta + self.data.__str__())
+                "--------------------------------\n" +
+                f"Number of data points:   {self.N:>5}\n" +
+                f"Start time:              {int(self.t_interval[0]):>5} s\n"
+                f"End time:                {int(self.t_interval[1]):>5} s\n\n")
+        hdr = "Data\n" + 55*"-" + "\n"
+        return (meta + hdr + self.data.__str__())
 
     def __getitem__(self, i):
         """Return segment using index."""
         return self.data[i]
+
+
+class Baseline:
+    """Class to represent a baseline.
+
+    For now only a linear baseline is implemented (which does follow
+    the ASTM standard). More sophisticated baselines, e.g. based on
+    splines, can of course be added.
+
+    Attributes
+    ----------
+    lims : (int, int)
+        Indices to indicate start and end of the baseline window.
+    func : Callable(t: float) -> float
+        Function that returns normalized heat flow as function of time.
+
+    Methods
+    -------
+    __call__(t: float) -> flaot
+        The class can be called as a function that provides the
+        interpolated normalized heat flow at the provided time(s) `t`.
+
+    """
+    def __init__(self, data: matrix, lims: tuple):
+        """Initialize Baseline instance.
+
+        Parameters
+        ----------
+        data : np.ndarray(dim=2, dtype=float)
+            Matrix with:
+              - Time [s]
+              - Temperature [°C]
+              - Heat flow [W]
+              - Normalized heat flow [W/g]
+        lims : (int, int)
+            Indices to indicate start and end of linear baseline.
+
+        """
+        self.lims = None  # limit of the baseline window, also end
+                          # points for linear interpolation
+        self.func = self._linear_baseline(data, lims)
+
+    def _linear_baseline(self, data: matrix, lims: tuple) -> Callable:
+        """Return linear interpolation function."""
+        t_ = data[lims[0], 0], data[lims[1], 0]
+        H = data[lims[0], 3], data[lims[1], 3]
+        def func(t):
+            return np.interp(t, t_, H)
+        return func
+
+    def __call__(self, t: float) -> float:
+        return self.func(t)
