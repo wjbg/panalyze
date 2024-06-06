@@ -1,5 +1,5 @@
 """
-Contains core of panalyze: Measurement, Segment
+Contains core of panalyze: Measurement, Segment, Baseline
 
 """
 
@@ -8,6 +8,7 @@ from typing import Callable, Union, Optional
 import numpy as np
 import numpy.typing as npt
 from scipy.interpolate import CubicSpline
+from scipy.integrate import trapezoid
 from datetime import datetime
 from io import StringIO
 import importlib.resources as impresources
@@ -17,8 +18,7 @@ vector = matrix = npt.NDArray[np.float_]  # Annotation shorthand
 
 # Sapphire heat capacity (there is probably a more elegant way to do this)
 fn = impresources.files(materials) / 'sapphire_cp.csv'
-CP_SAPPHIRE_DATA = np.loadtxt(fn,
-                              dtype=np.float32, delimiter=",",
+CP_SAPPHIRE_DATA = np.loadtxt(fn, dtype=np.float32, delimiter=",",
                               skiprows=1, usecols=(0, 2))
 CP_SAPPHIRE = CubicSpline(CP_SAPPHIRE_DATA[:, 0], CP_SAPPHIRE_DATA[:, 1])
 
@@ -206,18 +206,28 @@ class Segment():
         cp = cp_sapphire(T) * (Ds/Dst) * (sapphire.mass/self.mass)
         return np.column_stack((T, cp))
 
-    def calculate_enthalpy(self) -> float:
-        """Return
-        """
+    def calculate_normalized_enthalpy(self) -> float:
+        """Return normalized enthalpy of peak using defined Baseline."""
         if self.baseline is None:
-            raise RuntimeError("Baseline not yet defined")
-        else:
-            pass
+            raise TypeError("Baseline function is not defined")
+        ix = np.arange(*self.baseline.lims)
+        peak = self.data[ix, 3] - self.baseline(self.data[ix, 0])
+        H = abs(trapezoid(peak, self.data[ix, 0]))
+        return H
 
-    def baseline_from_lims(self, lims: tuple[int, int]):
+    def set_baseline(self, lims: list[int, int]):
+        """Create linear baseline using start and end indices.
+
+        Parameters
+        ----------
+        lims : List[int, int]
+            Start and end indices that define linear baseline.
+
         """
-        """
-        self.baseline = Baseline(self.data, lims)
+        self.baseline = Baseline(lims)
+        knots = self.data[:, [0, 3]][lims]  # Knots are the time and normalized
+                                            # heat flow at the provided limits.
+        self.baseline.set_linear(knots)
 
     def _interp_H(self, T: float) -> float:
         """Return heat flow at T based on linear interpolation.
@@ -261,48 +271,61 @@ class Baseline:
 
     For now only a linear baseline is implemented (which does follow
     the ASTM standard). More sophisticated baselines, e.g. based on
-    splines, can of course be added.
+    splines, can of course be added later.
 
     Attributes
     ----------
-    lims : (int, int)
-        Indices to indicate start and end of the baseline window.
+    lims : [int, int]
+        Indices indicating the start and end of the baseline window.
     func : Callable(t: float) -> float
         Function that returns normalized heat flow as function of time.
+    func_type : str
+        Description of the baseline function.
+    knots : np.ndarray(dim=2, dtype=float)
+        Points used to define the baseline function.
 
     Methods
     -------
+    set_linear(knots: float)
+        Set linear baseline function using two points.
     __call__(t: float) -> flaot
         The class can be called as a function that provides the
         interpolated normalized heat flow at the provided time(s) `t`.
 
     """
-    def __init__(self, data: matrix, lims: tuple):
+    def __init__(self, lims: tuple):
         """Initialize Baseline instance.
 
         Parameters
         ----------
-        data : np.ndarray(dim=2, dtype=float)
-            Matrix with:
-              - Time [s]
-              - Temperature [°C]
-              - Heat flow [W]
-              - Normalized heat flow [W/g]
-        lims : (int, int)
-            Indices to indicate start and end of linear baseline.
+        lims : (float, float)
+            Time window of the baseline.
 
         """
-        self.lims = None  # limit of the baseline window, also end
-                          # points for linear interpolation
-        self.func = self._linear_baseline(data, lims)
+        self.lims = lims
+        self.func = None
+        self.func_type = None
+        self.knots = None
 
-    def _linear_baseline(self, data: matrix, lims: tuple) -> Callable:
-        """Return linear interpolation function."""
-        t_ = data[lims[0], 0], data[lims[1], 0]
-        H = data[lims[0], 3], data[lims[1], 3]
+    def set_linear(self, knots: matrix) -> Callable:
+        """Set linear baseline function.
+
+        Parameters
+        ----------
+        knots : np.ndarray(shape=(2, 2) dtype=float), optional
+            Two data points (time vs. normalized heat flow) that
+            define the linear baseline. If not provided, the baseline
+            limits (lims) will be used.
+
+        """
+        self.knots = knots
+        self.func_type = "linear"
+        fit = np.polyfit(knots[:, 0], knots[:, 1], 1)
         def func(t):
-            return np.interp(t, t_, H)
-        return func
+            return np.polyval(fit, t)
+        self.func = func
 
     def __call__(self, t: float) -> float:
+        if self.func is None:
+            raise TypeError("Baseline function is not defined")
         return self.func(t)
