@@ -130,12 +130,14 @@ class Segment():
 
     Attributes
     ----------
-    data : np.ndarray(dim=2, type=float)
+    data : np.ndarray(dim=2, dtype=float)
         Matrix with DSC data in the following columns:
           - Time [s]
           - Temperature [°C]
           - Heat flow [mW]
           - Normalized heat flow [J/g]
+    baseline : np.ndarray(dim=2, dtype=float) (optional)
+        Matrix with baseline data.
     name : str
         Description of segment
     N : int
@@ -148,7 +150,11 @@ class Segment():
     Methods
     -------
     calculate_cp(baseline, sapphire, cp_sapphire)
-        Calculate heat capacity based on Segment data.
+        Return heat capacity based on Segment data.
+    calculate_enthalpy()
+        Return enthalpy; required definition of a baseline.
+    calculate_normalized_enthalpy()
+        Return normalized enthalpy; required definition of a baseline.
 
     """
 
@@ -216,19 +222,27 @@ class Segment():
         H = abs(trapezoid(peak, self.data[ix, 0]))
         return H
 
-    def set_baseline(self, lims: list[int, int]):
+    def create_linear_baseline(self, knots: list[int, int],
+                               lims: Optional[list[int, int]] = None):
         """Create linear baseline using start and end indices.
 
         Parameters
         ----------
-        lims : List[int, int]
-            Start and end indices that define linear baseline.
+        knots : List[int, int]
+            Indices of the two points that define linear baseline.
+        lims : List[int, int] (optional)
+            Indices that indicate the limits of the baseline. If not provided
+            the limit indices equals the knot indices.
 
         """
-        self.baseline = Baseline(lims)
-        knots = self.data[:, [0, 3]][lims]  # Knots are the time and normalized
-                                            # heat flow at the provided limits.
-        self.baseline.set_linear(knots)
+        if lims is None: lims = knots
+        baseline = self.data[lims[0]:lims[1], :]
+        tp = self.data[knots, 0]  # Time values at two knots
+        for i in [2, 3]:  # Heat flow & Normalized heat flow
+            yp = data[knots, i]
+            fit = np.polyfit(tp, yp, 1)
+            baseline[:, i] = np.polyval(fit, baseline[:, 0])
+        self.baseline = baseline
 
     def plot(self, x: str = "t", y: str = "h",
              ax: Optional[plt.Axes] = None) -> tuple[plt.Axes, list]
@@ -297,68 +311,3 @@ class Segment():
     def __getitem__(self, i):
         """Return segment using index."""
         return self.data[i]
-
-
-class Baseline:
-    """Class to represent a baseline.
-
-    For now only a linear baseline is implemented (which does follow
-    the ASTM standard). More sophisticated baselines, e.g. based on
-    splines, can of course be added later.
-
-    Attributes
-    ----------
-    lims : [int, int]
-        Indices indicating the start and end of the baseline window.
-    func : Callable(t: float) -> float
-        Function that returns normalized heat flow as function of time.
-    func_type : str
-        Description of the baseline function.
-    knots : np.ndarray(dim=2, dtype=float)
-        Points used to define the baseline function.
-
-    Methods
-    -------
-    set_linear(knots: float)
-        Set linear baseline function using two points.
-    __call__(t: float) -> flaot
-        The class can be called as a function that provides the
-        interpolated normalized heat flow at the provided time(s) `t`.
-
-    """
-    def __init__(self, lims: tuple):
-        """Initialize Baseline instance.
-
-        Parameters
-        ----------
-        lims : (float, float)
-            Time window of the baseline.
-
-        """
-        self.lims = lims
-        self.func = None
-        self.func_type = None
-        self.knots = None
-
-    def set_linear(self, knots: matrix) -> Callable:
-        """Set linear baseline function.
-
-        Parameters
-        ----------
-        knots : np.ndarray(shape=(2, 2) dtype=float), optional
-            Two data points (time vs. normalized heat flow) that
-            define the linear baseline. If not provided, the baseline
-            limits (lims) will be used.
-
-        """
-        self.knots = knots
-        self.func_type = "linear"
-        fit = np.polyfit(knots[:, 0], knots[:, 1], 1)
-        def func(t):
-            return np.polyval(fit, t)
-        self.func = func
-
-    def __call__(self, t: float) -> float:
-        if self.func is None:
-            raise TypeError("Baseline function is not defined")
-        return self.func(t)
