@@ -6,8 +6,6 @@ extremely limited. It does have:
   heating run)
 - A `Measurement` class that represents a full measurements that
   includes multiple `Segments`
-- A `Baseline` class to represent a baseline used to determine the
-  enthalpy under a peak.
 
 The `Segment` and `Measurement` have a method to load data from a CSV
 file exported from the TA TRIOS software. These CSV files should have
