@@ -216,11 +216,28 @@ class Segment():
     def calculate_normalized_enthalpy(self) -> float:
         """Return normalized enthalpy of peak using defined Baseline."""
         if self.baseline is None:
-            raise TypeError("Baseline function is not defined")
-        ix = np.arange(*self.baseline.lims)
-        peak = self.data[ix, 3] - self.baseline(self.data[ix, 0])
-        H = abs(trapezoid(peak, self.data[ix, 0]))
-        return H
+            raise TypeError("Baseline function is not yet defined")
+        lims = [np.nonzero(self.data[:, 0] == self.baseline[0, 0])[0][0],
+                np.nonzero(self.data[:, 0] == self.baseline[-1, 0])[0][0] + 1]
+        ix = np.arange(*lims)
+        peak = self.data[ix, 3] - self.baseline[:, 3]
+        h_tot = abs(trapezoid(peak, self.baseline[:, 0]))
+        return h_tot
+
+    def calculate_enthalpy(self) -> float:
+        """Return normalized enthalpy of peak using defined Baseline."""
+        if self.baseline is None:
+            raise TypeError("Baseline function is not yet defined")
+        lims = [np.nonzero(self.data[:, 0] == self.baseline[0, 0])[0][0],
+                np.nonzero(self.data[:, 0] == self.baseline[-1, 0])[0][0] + 1]
+        ix = np.arange(*lims)
+        peak = self.data[ix, 2] - self.baseline[:, 2]
+        H_tot = abs(trapezoid(peak, self.baseline[:, 0]))
+        return H_tot
+
+    def degree_of_conversion(self) -> vector:
+        """Return degree of conversion using defined baseline."""
+        pass
 
     def create_linear_baseline(self, knots: list[int, int],
                                lims: Optional[list[int, int]] = None):
@@ -236,16 +253,17 @@ class Segment():
 
         """
         if lims is None: lims = knots
-        baseline = self.data[lims[0]:lims[1], :]
+        baseline = self.data[lims[0]:lims[1], :].copy()
         tp = self.data[knots, 0]  # Time values at two knots
         for i in [2, 3]:  # Heat flow & Normalized heat flow
-            yp = data[knots, i]
+            yp = self.data[knots, i]
             fit = np.polyfit(tp, yp, 1)
             baseline[:, i] = np.polyval(fit, baseline[:, 0])
         self.baseline = baseline
 
     def plot(self, x: str = "t", y: str = "h",
-             ax: Optional[plt.Axes] = None) -> tuple[plt.Axes, list]
+             ax: Optional[plt.Axes] = None,
+             plot_bline: Optional[bool] = False) -> tuple[plt.Axes, list]:
         """Plot data in a Figure.
 
         Parameters
@@ -260,13 +278,15 @@ class Segment():
             - "h" : Normailzed heat flow
         ax : plt.Axes (optional)
             Axes for plotting.
+        plot_bline : bool (optional, defaults to None)
+            Plots baseline if True.
 
         Returns
         -------
         ax : plt.Axes
             Axes handle.
-        line : list with plt.lines.Line2d
-            Line handle.
+        lines : list with plt.lines.Line2d
+            Line handles.
 
         """
         if not isinstance(ax, plt.Axes):
@@ -274,7 +294,9 @@ class Segment():
         if isinstance(ax, plt.Axes):
             idx = {"t": 0, "T": 1, "H": 2, "h": 3}
             line = ax.plot(self.data[:, idx[x]], self.data[:, idx[y]])
-        return ax, line
+            if plot_bline:
+                ax.plot(self.baseline[:, idx[x]], self.baseline[:, idx[y]]))
+        return ax, lines
 
     def _interp_H(self, T: float) -> float:
         """Return heat flow at T based on linear interpolation.
