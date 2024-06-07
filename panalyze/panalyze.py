@@ -4,11 +4,12 @@ Contains core of panalyze: Measurement, Segment, Baseline
 """
 
 from __future__ import annotations
-from typing import Callable, Union, Optional
+from typing import Callable, Optional
 import numpy as np
 import numpy.typing as npt
 from scipy.interpolate import CubicSpline
 from scipy.integrate import trapezoid
+import matplotlib.pyplot as plt
 from datetime import datetime
 from io import StringIO
 import importlib.resources as impresources
@@ -228,6 +229,38 @@ class Segment():
         knots = self.data[:, [0, 3]][lims]  # Knots are the time and normalized
                                             # heat flow at the provided limits.
         self.baseline.set_linear(knots)
+
+    def plot(self, x: str = "t", y: str = "h",
+             ax: Optional[plt.Axes] = None) -> tuple[plt.Axes, list]
+        """Plot data in a Figure.
+
+        Parameters
+        ----------
+        x : str (defaults to "t" for time)
+            Data to plot on x-axis. Options include:
+            - "t" : time
+            - "T" : Temperature
+        y : str (defaults to "h" for normalized heat flow)
+            - "T" : Temperature
+            - "H" : Heat flow
+            - "h" : Normailzed heat flow
+        ax : plt.Axes (optional)
+            Axes for plotting.
+
+        Returns
+        -------
+        ax : plt.Axes
+            Axes handle.
+        line : list with plt.lines.Line2d
+            Line handle.
+
+        """
+        if not isinstance(ax, plt.Axes):
+            fig, ax = plt.subplots()
+        if isinstance(ax, plt.Axes):
+            idx = {"t": 0, "T": 1, "H": 2, "h": 3}
+            line = ax.plot(self.data[:, idx[x]], self.data[:, idx[y]])
+        return ax, line
 
     def _interp_H(self, T: float) -> float:
         """Return heat flow at T based on linear interpolation.
